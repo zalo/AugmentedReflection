@@ -11,9 +11,9 @@ export default class World {
 
         // gui 
         this.gui = new GUI();
-        this.params = { FoV: 60, DepthScalar: 4.0 };
+        this.params = { FoV: 60, DepthScalar: 0.2 };
         this.gui.add(this.params, 'FoV').min(30).max(100).name('Webcam FoV');
-        this.gui.add(this.params, 'DepthScalar').min(0.5).max(8.0).name('DepthScalar');
+        this.gui.add(this.params, 'DepthScalar').min(0.05).max(0.5).name('DepthScalar');
 
         // instanced spheres
         this.sphereGeometry = new THREE.SphereGeometry(1.0, 12, 12);
@@ -63,7 +63,8 @@ export default class World {
 
         let pos = results.multiFaceLandmarks[0];
         for (let i = 0; i < pos.length; i++){
-            this.vec.set((pos[i].x * 2.0) - 1.0, (pos[i].y * -2.0) + 1.0, (pos[i].z * this.params.DepthScalar) - 1.0).unproject(this.webcamera.camera);
+            this.vec.set((pos[i].x * 2.0) - 1.0, (pos[i].y * -2.0) + 1.0, -1.0).unproject(this.webcamera.camera);
+            this.vec.z -= (pos[i].z * this.params.DepthScalar);
             this.landmarks.setMatrixAt(i, this.mat.compose(this.vec, this.quat, this.vec6.set(0.001, 0.001, 0.001)));
             //this.landmarks.setColorAt(i, this.color.setRGB(i, Math.random(), Math.random()));
         }
