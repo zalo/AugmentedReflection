@@ -11,14 +11,13 @@ export default class World {
 
         // gui 
         this.gui = new GUI();
-        this.params = { myParam: 0 };
-        this.gui.add(this.params, 'myParam').min(0).max(1).name('My Param');
+        this.params = { FoV: 60 };
+        this.gui.add(this.params, 'FoV').min(30).max(100).name('Webcam FoV');
 
         // instanced spheres
         this.sphereGeometry = new THREE.SphereGeometry(1.0, 12, 12);
         this.solidMat = new THREE.MeshPhongMaterial({ wireframe: false });
         this.landmarks = new THREE.InstancedMesh(this.sphereGeometry, this.solidMat, 468);
-        this.landmarks.position.set(0.75, 0.75, 0.0);
         this.landmarks.receiveShadow = true;
         this.landmarks.castShadow = true;
         this.scene.add(this.landmarks);
@@ -41,15 +40,30 @@ export default class World {
           }, width: 1280, height: 720
         });
         this.webcamera.start();
+
+        this.webcamera.camera = new THREE.PerspectiveCamera( 78, this.webcamera.g.width / this.webcamera.g.height, 0.1, 1 );
+        this.webcamera.camera.position.set(0.0, 0.1, 0.2);
+        this.scene.add(this.webcamera.camera);
+        this.webcamera.camera.getWorldPosition();
+        this.webcamera.camera.updateProjectionMatrix();
+        this.helper = new THREE.CameraHelper( this.webcamera.camera );
+        this.scene.add( this.helper );
+
+        // Just do this once to initialize camera
+        this.renderer.render(this.scene, this.webcamera.camera);
     }
 
     onResults(results) {
         if (!results.multiFaceLandmarks) { return; }
+
+        this.webcamera.camera.fov = this.params.FoV;
+        this.webcamera.camera.updateProjectionMatrix();
+        this.helper.update();
+
         let pos = results.multiFaceLandmarks[0];
         for (let i = 0; i < pos.length; i++){
-            this.landmarks.setMatrixAt(i,
-                this.mat.compose(this.vec.set(pos[i].x * -1.78, pos[i].y * -1.0, pos[i].z * -1.0),
-                this.quat, this.vec6.set(0.01, 0.01, 0.01)));
+            this.vec.set((pos[i].x * 2.0) - 1.0, (pos[i].y * -2.0) + 1.0, (pos[i].z * 4.0) - 1.0).unproject(this.webcamera.camera);
+            this.landmarks.setMatrixAt(i, this.mat.compose(this.vec, this.quat, this.vec6.set(0.001, 0.001, 0.001)));
             //this.landmarks.setColorAt(i, this.color.setRGB(i, Math.random(), Math.random()));
         }
         this.landmarks.count = pos.length;
