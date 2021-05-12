@@ -2,6 +2,7 @@
   "dependencies": {
     "@mediapipe/camera_utils": "^0.3.1620247984",
     "@mediapipe/face_mesh": "^0.3.1620248508",
+    "esbuild": "^0.11.20",
     "three": "^0.127.0"
   }
 }

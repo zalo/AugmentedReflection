@@ -61,16 +61,39 @@ export default class World {
         this.webcamera.camera.updateProjectionMatrix();
         this.helper.update();
 
+        // Find the Average
+        this.vec2.set(0, 0, 0);
         let pos = results.multiFaceLandmarks[0];
         for (let i = 0; i < pos.length; i++){
-            this.vec.set((pos[i].x * 2.0) - 1.0, (pos[i].y * -2.0) + 1.0, -1.0).unproject(this.webcamera.camera);
-            this.vec.z -= (pos[i].z * this.params.DepthScalar);
+            this.transformPoint(pos[i], this.vec);
+            this.vec2.add(this.vec);
+        }
+        this.vec2.divideScalar(pos.length);
+
+        // Find the Sum Distance from the Average (Scale)
+        let scale = 0;
+        for (let i = 0; i < pos.length; i++){
+            this.transformPoint(pos[i], this.vec);
+            scale += this.vec3.copy(this.vec2).sub(this.vec).length();
+        }
+
+        // Divide position by scale to get 3D position
+        for (let i = 0; i < pos.length; i++){
+            this.transformPoint(pos[i], this.vec);
+            this.vec.sub(this.webcamera.camera.position).multiplyScalar(5.0/scale).add(this.webcamera.camera.position);
             this.landmarks.setMatrixAt(i, this.mat.compose(this.vec, this.quat, this.vec6.set(0.001, 0.001, 0.001)));
             //this.landmarks.setColorAt(i, this.color.setRGB(i, Math.random(), Math.random()));
         }
+
         this.landmarks.count = pos.length;
         this.landmarks.instanceMatrix.needsUpdate = true;
         //this.landmarks.instanceColor.needsUpdate = true;
+    }
+
+    /** Transform from camera UV space (?) to sort of local 3D space? */
+    transformPoint(point, vectorToFill) {
+        vectorToFill.set((point.x * 2.0) - 1.0, (point.y * -2.0) + 1.0, -1.0).unproject(this.webcamera.camera);
+        vectorToFill.z -= (point.z * this.params.DepthScalar);
     }
 
     /** Update the camera and render the scene */
