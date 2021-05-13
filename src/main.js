@@ -29,7 +29,7 @@ export default class World {
 
     async setupFaceTracking() {
         this.faceMesh = new FaceMesh({locateFile: (file) => {
-          return `../node_modules/@mediapipe/face_mesh/${file}`;
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.1/${file}`; //../node_modules/@mediapipe/face_mesh/
         }});
         this.faceMesh.onResults(this.onResults.bind(this));
         
