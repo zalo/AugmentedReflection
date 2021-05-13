@@ -37,7 +37,7 @@ jobs:
       # Switching the HTML entrypoint over to the build
       - name: Pre-Process Site
         run: |
-          sed -e 's/.\/src\//\/build\//g' index.html > index.html.tmp
+          sed -e 's/\/src\//\/build\//g' index.html > index.html.tmp
           mv index.html.tmp index.html
 
       - name: Run esbuild
