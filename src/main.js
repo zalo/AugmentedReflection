@@ -164,7 +164,7 @@ export default class World {
         this.light.shadow.camera.top    =   1;
         this.light.shadow.camera.bottom = - 1;
         this.light.shadow.camera.left   = - 1;
-        this.light.shadow.camera.right = 1;
+        this.light.shadow.camera.right  =   1;
         //this.light.shadow.autoUpdate = false;
         this.light.target = this.lightTarget;
         this.lightParent.add(this.light);
