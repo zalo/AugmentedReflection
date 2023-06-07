@@ -29,7 +29,7 @@ export default class World {
 
     async setupFaceTracking() {
         this.faceMesh = new FaceMesh({locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.1/${file}`; //../node_modules/@mediapipe/face_mesh/
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`; //../node_modules/@mediapipe/face_mesh/
         }});
         this.faceMesh.onResults(this.onResults.bind(this));
         
@@ -55,6 +55,7 @@ export default class World {
     }
 
     onResults(results) {
+        this.landmarks.count = 0;
         if (!results.multiFaceLandmarks) { return; }
 
         this.webcamera.camera.fov = this.params.FoV;
@@ -64,6 +65,7 @@ export default class World {
         // Find the Average
         this.vec2.set(0, 0, 0);
         let pos = results.multiFaceLandmarks[0];
+        if (!pos) { return; }
         for (let i = 0; i < pos.length; i++){
             this.transformPoint(pos[i], this.vec);
             this.vec2.add(this.vec);
