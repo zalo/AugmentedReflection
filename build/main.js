@@ -31167,16 +31167,21 @@ var World = class {
     this.params = {FoV: 60, DepthScalar: 0.2};
     this.gui.add(this.params, "FoV").min(30).max(100).name("Webcam FoV");
     this.gui.add(this.params, "DepthScalar").min(0.05).max(0.5).name("DepthScalar");
-    this.sphereGeometry = new SphereGeometry(1, 12, 12);
+    this.sphereGeometry = new SphereGeometry(1, 6, 6);
     this.solidMat = new MeshPhongMaterial({wireframe: false});
     this.landmarks = new InstancedMesh(this.sphereGeometry, this.solidMat, 468);
     this.landmarks.receiveShadow = true;
     this.landmarks.castShadow = true;
     this.scene.add(this.landmarks);
+    this.offset = new Vector3();
+    this.rawPoints = [];
+    this.filteredPoints = [];
+    this.hashParams = new URLSearchParams(window.location.hash.substring(1));
+    this.useFaceLandmarking = !(this.hashParams.has("bodyLandmarking") && this.hashParams.get("bodyLandmarking").toLowerCase() === "true");
     this.setupFaceTracking();
   }
   async setupFaceTracking() {
-    this.faceMesh = await this.createFaceLandmarker();
+    this.faceMesh = await this.createLandmarker();
     this.videoIsPlaying = false;
     this.video = document.getElementById("video");
     navigator.mediaDevices.getUserMedia({video: true}).then((stream) => {
@@ -31199,21 +31204,45 @@ var World = class {
         this.webcamQuad.position.set(0, 0, -0.2);
         this.webcamQuad.scale.set(this.webcamera.g.width / this.webcamera.g.height * 0.23, 0.23, 1);
         this.scene.add(this.webcamQuad);
+        if (!this.useFaceLandmarking) {
+          let lineMat = new LineBasicMaterial({color: 16777215});
+          this.linePoints = [];
+          for (let i2 = 0; i2 < 33; i2++) {
+            this.linePoints.push(new Vector3(0, 0, 0));
+            this.linePoints.push(new Vector3(Math.random() - 0.5, Math.random() - 0.5, -10.1));
+            this.rawPoints.push(new Vector3(0, 0, 0));
+            this.filteredPoints.push(new Vector3(0, 0, 0));
+          }
+          this.linegeometry = new BufferGeometry().setFromPoints(this.linePoints);
+          let line = new LineSegments(this.linegeometry, lineMat);
+        }
         this.renderer.render(this.scene, this.webcamera.camera);
       });
     });
   }
-  async createFaceLandmarker() {
+  async createLandmarker() {
     const filesetResolver = await Uo.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm");
-    return await lh.createFromOptions(filesetResolver, {
-      baseOptions: {
-        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-        delegate: "GPU"
-      },
-      outputFaceBlendshapes: false,
-      runningMode: "VIDEO",
-      numFaces: 1
-    });
+    if (this.useFaceLandmarking) {
+      return await lh.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+          delegate: "GPU"
+        },
+        outputFaceBlendshapes: false,
+        runningMode: "VIDEO",
+        numFaces: 1
+      });
+    } else {
+      return await Yh.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task`,
+          delegate: "GPU"
+        },
+        outputFaceBlendshapes: false,
+        runningMode: "VIDEO",
+        numFaces: 1
+      });
+    }
   }
   async detectLandmarks() {
     if (this.video && this.videoIsPlaying && this.lastVideoTime !== this.video.currentTime) {
@@ -31223,41 +31252,82 @@ var World = class {
   }
   onResults(results) {
     this.landmarks.count = 0;
-    if (!results.faceLandmarks) {
-      return;
-    }
     this.webcamera.camera.fov = this.params.FoV;
     this.webcamera.camera.updateProjectionMatrix();
     this.helper.update();
-    this.centroid.set(0, 0, 0);
-    let pos = results.faceLandmarks[0];
-    if (!pos) {
-      return;
+    if (this.useFaceLandmarking) {
+      if (!results.faceLandmarks) {
+        return;
+      }
+      this.centroid.set(0, 0, 0);
+      let pos = results.faceLandmarks[0];
+      if (!pos) {
+        return;
+      }
+      for (let i2 = 0; i2 < pos.length; i2++) {
+        this.transformPoint(pos[i2], this.vec);
+        this.centroid.add(this.vec);
+      }
+      this.centroid.divideScalar(pos.length);
+      let scale = 0;
+      for (let i2 = 0; i2 < pos.length; i2++) {
+        this.transformPoint(pos[i2], this.vec);
+        scale += this.vec3.copy(this.centroid).sub(this.vec).length();
+      }
+      for (let i2 = 0; i2 < pos.length; i2++) {
+        this.transformPoint(pos[i2], this.vec);
+        this.vec.multiplyScalar(1 / (scale * this.params.DepthScalar));
+        let z2 = this.vec.z;
+        this.vec.set(pos[i2].x * 2 - 1, pos[i2].y * -2 + 1, -1).unproject(this.webcamera.camera);
+        this.vec.divideScalar(this.vec.z / z2);
+        this.landmarks.setMatrixAt(i2, this.mat.compose(this.vec, this.quat, this.vec6.set(25e-5, 25e-5, 25e-5)));
+      }
+      this.landmarks.count = pos.length;
+      this.landmarks.instanceMatrix.needsUpdate = true;
+    } else {
+      this.worldCentroid = new Vector3();
+      this.cameraCentroid = new Vector3();
+      this.temp2 = new Vector3();
+      let pos = results.landmarks[0];
+      let wpos = results.worldLandmarks[0];
+      let previousCost = -1;
+      let currentCost = 0;
+      if (!pos) {
+        return;
+      }
+      for (let iter = 0; iter < 1e3; iter++) {
+        currentCost = 0;
+        for (let i2 = 0; i2 < pos.length; i2++) {
+          this.vec.set(wpos[i2].x * 0.1, -wpos[i2].y * 0.1, -wpos[i2].z * 0.1).add(this.offset);
+          this.worldCentroid.add(this.vec);
+          this.linePoints[i2 * 2 + 1].set(pos[i2].x * 2 - 1, pos[i2].y * -2 + 1, -1).unproject(this.webcamera.camera).normalize();
+          this.temp2.copy(this.vec).projectOnVector(this.linePoints[i2 * 2 + 1]);
+          this.cameraCentroid.add(this.temp2);
+          this.rawPoints[i2].copy(this.temp2);
+          currentCost += this.temp2.sub(this.vec).length();
+        }
+        this.linegeometry.setFromPoints(this.linePoints);
+        this.worldCentroid.divideScalar(pos.length);
+        this.cameraCentroid.divideScalar(pos.length);
+        let multiplier = 1;
+        this.offset.add(this.temp2.subVectors(this.cameraCentroid, this.worldCentroid).multiplyScalar(multiplier));
+        previousCost = currentCost;
+      }
+      for (let i2 = 0; i2 < pos.length; i2++) {
+        this.temp2.subVectors(this.rawPoints[i2], this.filteredPoints[i2]);
+        this.temp2.setLength(Math.max(this.temp2.length() - 125e-5, 0));
+        this.filteredPoints[i2].add(this.temp2);
+        this.landmarks.setMatrixAt(i2, this.mat.compose(this.filteredPoints[i2], this.quat, this.vec6.set(25e-4, 25e-4, 25e-4)));
+      }
+      this.landmarks.count = pos.length;
+      this.landmarks.instanceMatrix.needsUpdate = true;
     }
-    for (let i2 = 0; i2 < pos.length; i2++) {
-      this.transformPoint(pos[i2], this.vec);
-      this.centroid.add(this.vec);
-    }
-    this.centroid.divideScalar(pos.length);
-    let scale = 0;
-    for (let i2 = 0; i2 < pos.length; i2++) {
-      this.transformPoint(pos[i2], this.vec);
-      scale += this.vec3.copy(this.centroid).sub(this.vec).length();
-    }
-    for (let i2 = 0; i2 < pos.length; i2++) {
-      this.transformPoint(pos[i2], this.vec);
-      this.vec.multiplyScalar(1 / (scale * this.params.DepthScalar));
-      let z2 = this.vec.z;
-      this.vec.set(pos[i2].x * 2 - 1, pos[i2].y * -2 + 1, -1).unproject(this.webcamera.camera);
-      this.vec.divideScalar(this.vec.z / z2);
-      this.landmarks.setMatrixAt(i2, this.mat.compose(this.vec, this.quat, this.vec6.set(25e-5, 25e-5, 25e-5)));
-    }
-    this.landmarks.count = pos.length;
-    this.landmarks.instanceMatrix.needsUpdate = true;
   }
   transformPoint(point, vectorToFill) {
     vectorToFill.set(point.x * 2 - 1, point.y * -2 + 1, -1).unproject(this.webcamera.camera);
-    vectorToFill.z -= point.z * this.params.DepthScalar;
+    if (this.useFaceLandmarking) {
+      vectorToFill.z -= point.z * this.params.DepthScalar;
+    }
   }
   update() {
     this.detectLandmarks();
