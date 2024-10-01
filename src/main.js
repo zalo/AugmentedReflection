@@ -2,7 +2,7 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import Stats from '../node_modules/three/examples/jsm/libs/stats.module.js';
 import { GUI } from '../node_modules/three/examples/jsm/libs/dat.gui.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
-import { FaceLandmarker, FilesetResolver, DrawingUtils } from "../node_modules/@mediapipe/tasks-vision/vision_bundle.mjs";
+import { PoseLandmarker, FaceLandmarker, FilesetResolver, DrawingUtils } from "../node_modules/@mediapipe/tasks-vision/vision_bundle.mjs";
 //import { FaceLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest";
 
 /** The fundamental set up and animation structures for 3D Visualization */
@@ -24,6 +24,9 @@ export default class World {
         this.landmarks.receiveShadow = true;
         this.landmarks.castShadow = true;
         this.scene.add(this.landmarks);
+        this.offset = new THREE.Vector3();
+        this.rawPoints = [];
+        this.filteredPoints = [];
 
         // Construct the Face Tracking Pipeline
         this.setupFaceTracking();
@@ -58,6 +61,21 @@ export default class World {
                 this.webcamQuad.scale.set(this.webcamera.g.width/this.webcamera.g.height * 0.23, 0.23, 1);
                 this.scene.add(this.webcamQuad);
 
+                let lineMat = new THREE.LineBasicMaterial({ color: 0xffffff });
+                
+                this.linePoints = [];
+                for(let i = 0; i < 33; i++){
+                    this.linePoints.push( new THREE.Vector3( 0, 0, 0 ) );
+                    this.linePoints.push( new THREE.Vector3( Math.random()-0.5, Math.random()-0.5, -10.1 ) );
+                    this.rawPoints.push( new THREE.Vector3( 0, 0, 0 ) );
+                    this.filteredPoints.push( new THREE.Vector3( 0, 0, 0 ) );
+                }
+                
+                this.linegeometry = new THREE.BufferGeometry().setFromPoints( this.linePoints );
+                
+                let line = new THREE.LineSegments( this.linegeometry, lineMat );
+                //this.scene.add( line );
+
                 // Just do this once to initialize camera
                 this.renderer.render(this.scene, this.webcamera.camera);
             });
@@ -68,9 +86,10 @@ export default class World {
         const filesetResolver = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
         );
-        return await FaceLandmarker.createFromOptions(filesetResolver, {
+        return await PoseLandmarker.createFromOptions(filesetResolver, {
           baseOptions: {
-            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+            //modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task`,
             delegate: "GPU"
           },
           outputFaceBlendshapes: false,
@@ -88,44 +107,70 @@ export default class World {
 
     onResults(results) {
         this.landmarks.count = 0;
-        if (!results.faceLandmarks) { return; }
+        if (!results.landmarks) { console.log(results); return; }
 
         this.webcamera.camera.fov = this.params.FoV;
         this.webcamera.camera.updateProjectionMatrix();
         this.helper.update();
 
-        // Find the Average
-        this.centroid.set(0, 0, 0);
-        let pos = results.faceLandmarks[0];
+        // Find the Averages of the Landmarks
+        this.worldCentroid = new THREE.Vector3();
+        this.cameraCentroid = new THREE.Vector3();
+
+        this.temp2 = new THREE.Vector3();
+
+        let pos  = results.landmarks[0];
+        let wpos = results.worldLandmarks[0];
+        let previousCost = -1;
+        let currentCost  =  0;
         if (!pos) { return; }
-        for (let i = 0; i < pos.length; i++){
-            this.transformPoint(pos[i], this.vec);
-            this.centroid.add(this.vec);
+
+        for (let iter = 0; iter < 1000; iter++){
+            currentCost = 0;
+
+            for (let i = 0; i < pos.length; i++){
+                // Set the sphere position
+                this.vec.set(wpos[i].x* 0.1, -wpos[i].y* 0.1, -wpos[i].z * 0.1).add(this.offset);
+                this.worldCentroid.add(this.vec);
+
+                // Set the end of the line segment
+                this.linePoints[(i*2)+1].set((pos[i].x * 2.0) - 1.0, (pos[i].y * -2.0) + 1.0, -1.0).unproject(this.webcamera.camera).normalize();
+
+                // Project the world point onto the line segment
+                this.temp2.copy(this.vec).projectOnVector(this.linePoints[(i*2)+1]);
+                this.cameraCentroid.add(this.temp2);
+                this.rawPoints[i].copy(this.temp2);
+
+                // Calculate the cost
+                currentCost += this.temp2.sub(this.vec).length();
+            }
+            this.linegeometry.setFromPoints(this.linePoints);
+
+            this. worldCentroid.divideScalar(pos.length);
+            this.cameraCentroid.divideScalar(pos.length);
+
+            let multiplier = 1.0;//(iter > 0 && (previousCost - currentCost) > 0.00001) ? (previousCost / (previousCost - currentCost)) * 0.8 : 1.0;
+            this.offset.add(this.temp2.subVectors(this.cameraCentroid, this.worldCentroid).multiplyScalar(multiplier));
+
+            //if(iter == 999) { console.log(multiplier, currentCost, previousCost); }
+            previousCost = currentCost;
+
         }
-        this.centroid.divideScalar(pos.length);
+        //console.log(currentCost);
 
-        // Find the Sum Distance from the Average (Scale)
-        let scale = 0;
+        // Use Point Filtering
         for (let i = 0; i < pos.length; i++){
-            this.transformPoint(pos[i], this.vec);
-            scale += this.vec3.copy(this.centroid).sub(this.vec).length();
+            // Lerp towards destination
+            //this.temp2.subVectors(this.rawPoints[i], this.filteredPoints[i]);
+            //this.filteredPoints[i].add(this.temp2.multiplyScalar(0.1));
+
+            // Clamp the distance
+            this.temp2.subVectors(this.rawPoints[i], this.filteredPoints[i]);
+            this.temp2.setLength(Math.max(this.temp2.length() - 0.00125, 0.0));
+            this.filteredPoints[i].add(this.temp2);
+            this.landmarks.setMatrixAt(i, this.mat.compose(this.filteredPoints[i], this.quat, this.vec6.set( 0.0025, 0.0025, 0.0025)));
         }
 
-        // Divide position by scale to get 3D position
-        for (let i = 0; i < pos.length; i++){
-            this.transformPoint(pos[i], this.vec);
-            this.vec.multiplyScalar(1.0/(scale * this.params.DepthScalar));
-            
-            //let dist = this.vec.length();
-            let z = this.vec.z;
-
-            this.vec.set((pos[i].x * 2.0) - 1.0, (pos[i].y * -2.0) + 1.0, -1.0).unproject(this.webcamera.camera);
-
-            //this.vec.setLength(dist);
-            this.vec.divideScalar(this.vec.z / z);
-
-            this.landmarks.setMatrixAt(i, this.mat.compose(this.vec, this.quat, this.vec6.set(0.00025, 0.00025, 0.00025)));
-        }
 
         this.landmarks.count = pos.length;
         this.landmarks.instanceMatrix.needsUpdate = true;
@@ -134,7 +179,7 @@ export default class World {
     /** Transform from camera UV space (?) to sort of local 3D space? */
     transformPoint(point, vectorToFill) {
         vectorToFill.set((point.x * 2.0) - 1.0, (point.y * -2.0) + 1.0, -1.0).unproject(this.webcamera.camera);
-        vectorToFill.z -= (point.z * this.params.DepthScalar);
+        //vectorToFill.z -= (point.z * this.params.DepthScalar);
     }
 
     /** Update the camera and render the scene */
@@ -177,7 +222,7 @@ export default class World {
 
         // ground
         this.mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(2, 2),
-                                   new THREE.MeshStandardMaterial({ color: 0xffffff, depthWrite: false})); //, opacity: 0 
+                                   new THREE.MeshStandardMaterial({ color: 0xaaaaaa, depthWrite: false})); //, opacity: 0 
         this.mesh.rotation.x = - Math.PI / 2;
         //this.mesh.castShadow = true;
         this.mesh.receiveShadow = true;
