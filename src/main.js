@@ -28,7 +28,9 @@ export default class World {
         this.rawPoints = [];
         this.filteredPoints = [];
 
-        this.useFaceLandmarking = !(new URLSearchParams(window.location.hash.substring(1)).get('bodyLandmarking').toLowerCase() === 'true'); 
+        this.hashParams = new URLSearchParams(window.location.hash.substring(1));
+        this.useFaceLandmarking = !(this.hashParams.has('bodyLandmarking') &&
+                                    this.hashParams.get('bodyLandmarking').toLowerCase() === 'true');
 
         // Construct the Face Tracking Pipeline
         this.setupFaceTracking();
