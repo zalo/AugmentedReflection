@@ -18,7 +18,7 @@ export default class World {
         this.gui.add(this.params, 'DepthScalar').min(0.05).max(0.5).name('DepthScalar');
 
         // instanced spheres
-        this.sphereGeometry = new THREE.SphereGeometry(1.0, 12, 12);
+        this.sphereGeometry = new THREE.SphereGeometry(1.0, 6, 6);
         this.solidMat = new THREE.MeshPhongMaterial({ wireframe: false });
         this.landmarks = new THREE.InstancedMesh(this.sphereGeometry, this.solidMat, 468);
         this.landmarks.receiveShadow = true;
