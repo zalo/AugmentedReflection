@@ -1,13 +1,10 @@
 {
 	"scripts": {
-		"build": "esbuild ./src/main.js --bundle --minify --sourcemap --format=esm --outdir=./build"
+		"build": "esbuild ./src/main.js --bundle --sourcemap --format=esm --outdir=./build"
 	},
 	"dependencies": {
+		"@mediapipe/tasks-vision": "^0.10.16",
 		"esbuild": "^0.11.20",
 		"three": "^0.127.0"
-	},
-	"unused_dependencies": {
-		"@mediapipe/camera_utils": "^0.3.1675466862",
-		"@mediapipe/face_mesh": "^0.4.1633559619"
 	}
 }

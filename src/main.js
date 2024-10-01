@@ -2,6 +2,8 @@ import * as THREE from '../node_modules/three/build/three.module.js';
 import Stats from '../node_modules/three/examples/jsm/libs/stats.module.js';
 import { GUI } from '../node_modules/three/examples/jsm/libs/dat.gui.module.js';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
+import { FaceLandmarker, FilesetResolver, DrawingUtils } from "../node_modules/@mediapipe/tasks-vision/vision_bundle.mjs";
+//import { FaceLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest";
 
 /** The fundamental set up and animation structures for 3D Visualization */
 export default class World {
@@ -28,68 +30,105 @@ export default class World {
     }
 
     async setupFaceTracking() {
-        this.faceMesh = new FaceMesh({locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`; //../node_modules/@mediapipe/face_mesh/
-        }});
-        this.faceMesh.onResults(this.onResults.bind(this));
-        
-        // Instantiate a camera. We'll feed each frame we receive into the solution.
-        let videoElement = document.getElementsByClassName('input_video')[0];
-        this.webcamera = new Camera(videoElement, {
-          onFrame: async () => {
-            await this.faceMesh.send({image: videoElement});
-          }, width: 1280, height: 720
+        this.faceMesh = await this.createFaceLandmarker();
+        this.videoIsPlaying = false;
+        /** @type {HTMLMediaElement} */
+        this.video = document.getElementById("video");
+        navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+            this.video.srcObject = stream;
+            this.video.addEventListener("loadeddata", () =>{ 
+                this.videoIsPlaying = true; 
+            
+                // Create a camera for the webcam
+                this.lastVideoTime = -1;
+                this.webcamera = new THREE.Group();
+                this.webcamera.g = new THREE.Vector2(this.video.videoWidth, this.video.videoHeight);
+                this.webcamera.camera = new THREE.PerspectiveCamera( 60, this.webcamera.g.width / this.webcamera.g.height, 0.1, 1 );
+                this.webcamera.camera.position.set(0.0, 0.0, 0.0);
+                this.scene.add(this.webcamera.camera);
+                this.webcamera.camera.getWorldPosition();
+                this.webcamera.camera.updateProjectionMatrix();
+                this.helper = new THREE.CameraHelper( this.webcamera.camera );
+                this.scene.add( this.helper );
+
+                this.webcamTexture = new THREE.VideoTexture( this.video );
+                this.webcamMat = new THREE.MeshBasicMaterial({ map: this.webcamTexture, side: THREE.DoubleSide }); //
+                this.webcamQuad = new THREE.Mesh(new THREE.PlaneBufferGeometry(1, 1), this.webcamMat);
+                this.webcamQuad.position.set(0.0, 0.0, -0.2);
+                this.webcamQuad.scale.set(this.webcamera.g.width/this.webcamera.g.height * 0.23, 0.23, 1);
+                this.scene.add(this.webcamQuad);
+
+                // Just do this once to initialize camera
+                this.renderer.render(this.scene, this.webcamera.camera);
+            });
         });
-        this.webcamera.start();
+    }
 
-        this.webcamera.camera = new THREE.PerspectiveCamera( 78, this.webcamera.g.width / this.webcamera.g.height, 0.1, 1 );
-        this.webcamera.camera.position.set(0.0, 0.1, 0.2);
-        this.scene.add(this.webcamera.camera);
-        this.webcamera.camera.getWorldPosition();
-        this.webcamera.camera.updateProjectionMatrix();
-        this.helper = new THREE.CameraHelper( this.webcamera.camera );
-        this.scene.add( this.helper );
+    async createFaceLandmarker() {
+        const filesetResolver = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+        );
+        return await FaceLandmarker.createFromOptions(filesetResolver, {
+          baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+            delegate: "GPU"
+          },
+          outputFaceBlendshapes: false,
+          runningMode: "VIDEO",
+          numFaces: 1
+        });
+    }
 
-        // Just do this once to initialize camera
-        this.renderer.render(this.scene, this.webcamera.camera);
+    async detectLandmarks() {
+        if (this.video && this.videoIsPlaying && this.lastVideoTime !== this.video.currentTime) {
+            this.lastVideoTime = this.video.currentTime;
+            this.onResults(this.faceMesh.detectForVideo(this.video, performance.now()));
+        }
     }
 
     onResults(results) {
         this.landmarks.count = 0;
-        if (!results.multiFaceLandmarks) { return; }
+        if (!results.faceLandmarks) { return; }
 
         this.webcamera.camera.fov = this.params.FoV;
         this.webcamera.camera.updateProjectionMatrix();
         this.helper.update();
 
         // Find the Average
-        this.vec2.set(0, 0, 0);
-        let pos = results.multiFaceLandmarks[0];
+        this.centroid.set(0, 0, 0);
+        let pos = results.faceLandmarks[0];
         if (!pos) { return; }
         for (let i = 0; i < pos.length; i++){
             this.transformPoint(pos[i], this.vec);
-            this.vec2.add(this.vec);
+            this.centroid.add(this.vec);
         }
-        this.vec2.divideScalar(pos.length);
+        this.centroid.divideScalar(pos.length);
 
         // Find the Sum Distance from the Average (Scale)
         let scale = 0;
         for (let i = 0; i < pos.length; i++){
             this.transformPoint(pos[i], this.vec);
-            scale += this.vec3.copy(this.vec2).sub(this.vec).length();
+            scale += this.vec3.copy(this.centroid).sub(this.vec).length();
         }
 
         // Divide position by scale to get 3D position
         for (let i = 0; i < pos.length; i++){
             this.transformPoint(pos[i], this.vec);
-            this.vec.sub(this.webcamera.camera.position).multiplyScalar(5.0/scale).add(this.webcamera.camera.position);
-            this.landmarks.setMatrixAt(i, this.mat.compose(this.vec, this.quat, this.vec6.set(0.001, 0.001, 0.001)));
-            //this.landmarks.setColorAt(i, this.color.setRGB(i, Math.random(), Math.random()));
+            this.vec.multiplyScalar(1.0/(scale * this.params.DepthScalar));
+            
+            //let dist = this.vec.length();
+            let z = this.vec.z;
+
+            this.vec.set((pos[i].x * 2.0) - 1.0, (pos[i].y * -2.0) + 1.0, -1.0).unproject(this.webcamera.camera);
+
+            //this.vec.setLength(dist);
+            this.vec.divideScalar(this.vec.z / z);
+
+            this.landmarks.setMatrixAt(i, this.mat.compose(this.vec, this.quat, this.vec6.set(0.00025, 0.00025, 0.00025)));
         }
 
         this.landmarks.count = pos.length;
         this.landmarks.instanceMatrix.needsUpdate = true;
-        //this.landmarks.instanceColor.needsUpdate = true;
     }
 
     /** Transform from camera UV space (?) to sort of local 3D space? */
@@ -100,6 +139,8 @@ export default class World {
 
     /** Update the camera and render the scene */
     update() {
+        this.detectLandmarks();
+
         // Update the Orbit Controls
         this.controls.update();
 
@@ -126,8 +167,8 @@ export default class World {
 
         this.cameraWorldPosition = new THREE.Vector3(1,1,1);
         this.cameraWorldScale    = new THREE.Vector3(1,1,1);
-        this.camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.0001, 1000 );
-        this.camera.position.set( 0.1, 0.2, 0.3 );
+        this.camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.0001, 1000 );
+        this.camera.position.set( 0, 0.0, 0.0);//0.1, 0.2, 0.3 );
         this.camera.layers.enableAll();
         this.cameraParent = new THREE.Group();
         this.cameraParent.add(this.camera);
@@ -136,22 +177,24 @@ export default class World {
 
         // ground
         this.mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(2, 2),
-                                   new THREE.MeshStandardMaterial({ color: 0xaaaaaa, depthWrite: false})); //, opacity: 0 
+                                   new THREE.MeshStandardMaterial({ color: 0xffffff, depthWrite: false})); //, opacity: 0 
         this.mesh.rotation.x = - Math.PI / 2;
         //this.mesh.castShadow = true;
         this.mesh.receiveShadow = true;
         this.mesh.frustumCulled = false;
+        this.mesh.position.y = -0.1;
         this.scene.add( this.mesh );
         this.grid = new THREE.GridHelper( 2, 20, 0x000000, 0x000000 );
         this.grid.material.opacity = 0.4;
         this.grid.material.transparent = true;
         this.grid.layers.set(2);
         this.grid.frustumCulled = false;
+        this.grid.position.y = -0.1;
         this.scene.add(this.grid);
         
         // light
         this.light = new THREE.HemisphereLight( 0xffffff, 0x444444, 0.5 );
-        this.light.position.set( 0, 0.2, 0 );
+        this.light.position.set( 0, 0.0, 0 );
         this.scene.add( this.light );
         this.lightParent = new THREE.Group();
         this.lightTarget = new THREE.Group();
@@ -185,7 +228,7 @@ export default class World {
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.10;
         this.controls.screenSpacePanning = true;
-        this.controls.target.set( 0, 0.1, 0 );
+        this.controls.target.set( 0, 0.0, -0.1 );
         this.controls.update();
         window.addEventListener('resize', this._onWindowResize.bind(this), false);
         window.addEventListener('orientationchange', this._onWindowResize.bind(this), false);
@@ -202,7 +245,7 @@ export default class World {
         // Temp variables to reduce allocations
         this.mat  = new THREE.Matrix4();
         this.vec = new THREE.Vector3();
-        this.vec2 = new THREE.Vector3();
+        this.centroid = new THREE.Vector3();
         this.vec3 = new THREE.Vector3();
         this.vec4 = new THREE.Vector3();
         this.vec5 = new THREE.Vector3();
